@@ -401,7 +401,11 @@ export const useHotelStore = create<HotelStore>()(
             color: bookingData.color,
           };
           if (user && !isDemo(user.id)) {
-            const { data } = await supabase.from('bookings').insert(bookingToDb(newB, user.id)).select().single();
+            const { data, error } = await supabase.from('bookings').insert(bookingToDb(newB, user.id)).select().single();
+            if (error) {
+              get().showToast('Помилка збереження бронювання: ' + error.message, 'error');
+              return;
+            }
             if (data) newB.id = (data as Record<string, unknown>).id as string;
           }
           set({ bookings: [...bookings, newB], isBookingModalOpen: false, editingBooking: null });
@@ -448,7 +452,11 @@ export const useHotelStore = create<HotelStore>()(
             active: roomData.active ?? true,
           };
           if (user && !isDemo(user.id)) {
-            const { data } = await supabase.from('rooms').insert(roomToDb(newRoom, user.id)).select().single();
+            const { data, error } = await supabase.from('rooms').insert(roomToDb(newRoom, user.id)).select().single();
+            if (error) {
+              get().showToast('Помилка збереження номера: ' + error.message, 'error');
+              return;
+            }
             if (data) newRoom.id = (data as Record<string, unknown>).id as string;
           }
           set({ rooms: [...rooms, newRoom], isRoomModalOpen: false, editingRoom: null });
