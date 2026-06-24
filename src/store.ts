@@ -493,24 +493,49 @@ export const useHotelStore = create<HotelStore>()(
       // ---- IMPORT ----
       importBedbookingData: async (newRooms, newGuests, newBookings) => {
         const { user, rooms: existingRooms, guests: existingGuests, bookings: existingBookings } = get();
-        if (!user || isDemo(user.id)) {
-          // Demo mode: just merge into state
-          const mergedRooms = [...existingRooms];
-          const mergedGuests = [...existingGuests];
-          for (const r of newRooms) {
-            if (!mergedRooms.find(x => x.name === r.name)) mergedRooms.push(r);
+
+        // Build roomId remap: CSV-generated UUID → final UUID (existing or new)
+        const roomIdMap = new Map<string, string>();
+        const roomsToInsert: typeof newRooms = [];
+        for (const room of newRooms) {
+          const existing = existingRooms.find(x => x.name === room.name);
+          if (existing) {
+            roomIdMap.set(room.id, existing.id);
+          } else {
+            roomIdMap.set(room.id, room.id);
+            roomsToInsert.push(room);
           }
-          for (const g of newGuests) {
-            if (!mergedGuests.find(x => x.firstName === g.firstName && x.lastName === g.lastName)) mergedGuests.push(g);
-          }
-          set({ rooms: mergedRooms, guests: mergedGuests, bookings: [...existingBookings, ...newBookings] });
-          return { rooms: newRooms.length, bookings: newBookings.length };
         }
 
-        // Real user — upsert to Supabase
-        const roomsToInsert = newRooms.filter(r => !existingRooms.find(x => x.name === r.name));
-        const guestsToInsert = newGuests.filter(g => !existingGuests.find(x => x.firstName === g.firstName && x.lastName === g.lastName));
+        // Build guestId remap similarly
+        const guestIdMap = new Map<string, string>();
+        const guestsToInsert: typeof newGuests = [];
+        for (const guest of newGuests) {
+          const existing = existingGuests.find(x => x.firstName === guest.firstName && x.lastName === guest.lastName);
+          if (existing) {
+            guestIdMap.set(guest.id, existing.id);
+          } else {
+            guestIdMap.set(guest.id, guest.id);
+            guestsToInsert.push(guest);
+          }
+        }
 
+        // Remap bookings to use correct IDs
+        const remappedBookings = newBookings.map(b => ({
+          ...b,
+          roomId: roomIdMap.get(b.roomId) ?? b.roomId,
+          guestId: guestIdMap.get(b.guestId) ?? b.guestId,
+        }));
+
+        if (!user || isDemo(user.id)) {
+          // Demo mode: merge into state
+          const mergedRooms = [...existingRooms, ...roomsToInsert];
+          const mergedGuests = [...existingGuests, ...guestsToInsert];
+          set({ rooms: mergedRooms, guests: mergedGuests, bookings: [...existingBookings, ...remappedBookings] });
+          return { rooms: roomsToInsert.length, bookings: remappedBookings.length };
+        }
+
+        // Real user — insert to Supabase in correct order
         if (roomsToInsert.length > 0) {
           const { error } = await supabase.from('rooms').insert(roomsToInsert.map(r => roomToDb(r, user.id)));
           if (error) throw new Error('Помилка збереження номерів: ' + error.message);
@@ -521,13 +546,13 @@ export const useHotelStore = create<HotelStore>()(
           );
           if (error) throw new Error('Помилка збереження гостей: ' + error.message);
         }
-        if (newBookings.length > 0) {
-          const { error } = await supabase.from('bookings').insert(newBookings.map(b => bookingToDb(b, user.id)));
+        if (remappedBookings.length > 0) {
+          const { error } = await supabase.from('bookings').insert(remappedBookings.map(b => bookingToDb(b, user.id)));
           if (error) throw new Error('Помилка збереження бронювань: ' + error.message);
         }
 
         await get().loadData();
-        return { rooms: roomsToInsert.length, bookings: newBookings.length };
+        return { rooms: roomsToInsert.length, bookings: remappedBookings.length };
       },
 
       // ---- TOAST ----
