@@ -166,6 +166,9 @@ interface HotelStore {
   // Guests
   findOrCreateGuest: (name: string) => Promise<Guest>;
 
+  // Import
+  importBedbookingData: (rooms: Room[], guests: Guest[], bookings: Booking[]) => Promise<{ rooms: number; bookings: number }>;
+
   // Toast
   showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
   clearToast: () => void;
@@ -485,6 +488,46 @@ export const useHotelStore = create<HotelStore>()(
         }
         set((s) => ({ guests: [...s.guests, newG] }));
         return newG;
+      },
+
+      // ---- IMPORT ----
+      importBedbookingData: async (newRooms, newGuests, newBookings) => {
+        const { user, rooms: existingRooms, guests: existingGuests, bookings: existingBookings } = get();
+        if (!user || isDemo(user.id)) {
+          // Demo mode: just merge into state
+          const mergedRooms = [...existingRooms];
+          const mergedGuests = [...existingGuests];
+          for (const r of newRooms) {
+            if (!mergedRooms.find(x => x.name === r.name)) mergedRooms.push(r);
+          }
+          for (const g of newGuests) {
+            if (!mergedGuests.find(x => x.firstName === g.firstName && x.lastName === g.lastName)) mergedGuests.push(g);
+          }
+          set({ rooms: mergedRooms, guests: mergedGuests, bookings: [...existingBookings, ...newBookings] });
+          return { rooms: newRooms.length, bookings: newBookings.length };
+        }
+
+        // Real user — upsert to Supabase
+        const roomsToInsert = newRooms.filter(r => !existingRooms.find(x => x.name === r.name));
+        const guestsToInsert = newGuests.filter(g => !existingGuests.find(x => x.firstName === g.firstName && x.lastName === g.lastName));
+
+        if (roomsToInsert.length > 0) {
+          const { error } = await supabase.from('rooms').insert(roomsToInsert.map(r => roomToDb(r, user.id)));
+          if (error) throw new Error('Помилка збереження номерів: ' + error.message);
+        }
+        if (guestsToInsert.length > 0) {
+          const { error } = await supabase.from('guests').insert(
+            guestsToInsert.map(g => ({ id: g.id, user_id: user.id, first_name: g.firstName, last_name: g.lastName, phone: g.phone, email: g.email }))
+          );
+          if (error) throw new Error('Помилка збереження гостей: ' + error.message);
+        }
+        if (newBookings.length > 0) {
+          const { error } = await supabase.from('bookings').insert(newBookings.map(b => bookingToDb(b, user.id)));
+          if (error) throw new Error('Помилка збереження бронювань: ' + error.message);
+        }
+
+        await get().loadData();
+        return { rooms: roomsToInsert.length, bookings: newBookings.length };
       },
 
       // ---- TOAST ----

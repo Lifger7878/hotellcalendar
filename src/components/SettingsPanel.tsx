@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
-import { Save, Building2, Phone, Mail, MapPin, Loader2, CheckCircle2, AlertCircle, Database, ExternalLink, Copy, Check } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Save, Building2, Phone, Mail, MapPin, Loader2, CheckCircle2, AlertCircle, Database, ExternalLink, Copy, Check, Upload, FileText } from 'lucide-react';
 import { useHotelStore } from '../store';
+import type { Room, Guest, Booking } from '../types';
 
 const hasSupabase = !!(
   import.meta.env.VITE_SUPABASE_URL &&
@@ -119,6 +120,9 @@ export function SettingsPanel() {
           </div>
         </form>
       </div>
+
+      {/* Bedbooking import */}
+      <BedbookingImport />
 
       {/* Supabase connection status */}
       <DatabaseGuide />
@@ -248,6 +252,204 @@ function DatabaseGuide() {
           <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-xs text-blue-700">
             <strong>Для продакшн-деплою:</strong> На Vercel/Netlify додайте ці ж змінні у Environment Variables (Settings → Environment Variables) — не зберігайте ключі у публічному коді.
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- CSV parser helpers ----
+function parseCsvRow(line: string): string[] {
+  const result: string[] = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQuotes = !inQuotes; continue; }
+    if (ch === ',' && !inQuotes) { result.push(field); field = ''; continue; }
+    field += ch;
+  }
+  result.push(field);
+  return result;
+}
+
+function ddmmyyyyToIso(date: string): string {
+  const [d, m, y] = date.split('.');
+  return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+}
+
+function mapStatus(s: string): Booking['status'] {
+  if (s === '3') return 'cancelled';
+  if (s === '2') return 'pending';
+  return 'confirmed';
+}
+
+function parseBedbookingCsv(text: string): { rooms: Room[]; guests: Guest[]; bookings: Booking[] } {
+  const lines = text.trim().split('\n').filter(Boolean);
+  if (lines.length < 2) throw new Error('Порожній або невірний файл');
+
+  const headers = parseCsvRow(lines[0]);
+  const idx = (name: string) => headers.indexOf(name);
+
+  const roomMap = new Map<string, Room>();
+  const guestMap = new Map<string, Guest>();
+  const bookings: Booking[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = parseCsvRow(lines[i]);
+    const get = (name: string) => cols[idx(name)]?.trim() ?? '';
+
+    const roomId = get('RoomId');
+    const roomName = get('RoomName') || `Кімната ${roomId}`;
+    if (!roomMap.has(roomId)) {
+      roomMap.set(roomId, {
+        id: crypto.randomUUID(),
+        number: roomId,
+        name: roomName,
+        category: 'standard',
+        capacity: 2,
+        pricePerNight: parseFloat(get('PricePerDay')) || 0,
+        color: '#3b82f6',
+        amenities: [],
+        active: true,
+      });
+    }
+    const room = roomMap.get(roomId)!;
+
+    const clientName = get('ClientName').trim();
+    const clientPhone = get('ClientPhone').trim();
+    const guestKey = clientName.toLowerCase() + clientPhone;
+    if (!guestMap.has(guestKey)) {
+      const parts = clientName.split(' ');
+      const firstName = parts[0] ?? clientName;
+      const lastName = parts.slice(1).join(' ');
+      guestMap.set(guestKey, {
+        id: crypto.randomUUID(),
+        firstName,
+        lastName,
+        phone: clientPhone,
+        email: get('ClientEmail'),
+      });
+    }
+    const guest = guestMap.get(guestKey)!;
+
+    const checkIn = ddmmyyyyToIso(get('StartTime'));
+    const checkOut = ddmmyyyyToIso(get('EndTime'));
+    const totalPrice = parseFloat(get('Price')) || 0;
+    const paidAmount = parseFloat(get('Provision')) || 0;
+    const adults = parseInt(get('Persons')) || 1;
+    const children = parseInt(get('Kids')) || 0;
+
+    bookings.push({
+      id: crypto.randomUUID(),
+      roomId: room.id,
+      guestId: guest.id,
+      guestName: clientName,
+      checkIn,
+      checkOut,
+      status: mapStatus(get('Status')),
+      adults,
+      children,
+      totalPrice,
+      paidAmount,
+      notes: get('ClientNote'),
+      source: 'other',
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  return {
+    rooms: Array.from(roomMap.values()),
+    guests: Array.from(guestMap.values()),
+    bookings,
+  };
+}
+
+function BedbookingImport() {
+  const { importBedbookingData, showToast } = useHotelStore();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [preview, setPreview] = useState<{ rooms: number; bookings: number; guests: number } | null>(null);
+  const [parsed, setParsed] = useState<{ rooms: Room[]; guests: Guest[]; bookings: Booking[] } | null>(null);
+  const [error, setError] = useState('');
+  const [importing, setImporting] = useState(false);
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setError('');
+    setPreview(null);
+    setParsed(null);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const text = ev.target?.result as string;
+        const result = parseBedbookingCsv(text);
+        setParsed(result);
+        setPreview({ rooms: result.rooms.length, guests: result.guests.length, bookings: result.bookings.length });
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Помилка читання файлу');
+      }
+    };
+    reader.readAsText(file, 'utf-8');
+  };
+
+  const handleImport = async () => {
+    if (!parsed) return;
+    setImporting(true);
+    try {
+      const result = await importBedbookingData(parsed.rooms, parsed.guests, parsed.bookings);
+      showToast(`Імпортовано: ${result.rooms} номерів, ${result.bookings} бронювань`, 'success');
+      setParsed(null);
+      setPreview(null);
+      if (fileRef.current) fileRef.current.value = '';
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Помилка імпорту');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+      <div className="flex items-center gap-2 mb-4">
+        <Upload size={18} className="text-blue-600" />
+        <h3 className="font-bold text-slate-800 text-sm">Імпорт з Bedbooking</h3>
+      </div>
+      <p className="text-xs text-slate-500 mb-4">
+        Завантажте CSV-файл експорту Bedbooking — усі номери та бронювання будуть додані до вашого календаря.
+      </p>
+
+      <label className="flex items-center gap-3 cursor-pointer border-2 border-dashed border-slate-200 hover:border-blue-400 rounded-xl p-4 transition-colors">
+        <FileText size={24} className="text-slate-400 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium text-slate-700">Оберіть CSV файл</div>
+          <div className="text-xs text-slate-400">Bedbooking_export_*.csv</div>
+        </div>
+        <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleFile} />
+      </label>
+
+      {error && (
+        <div className="mt-3 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>
+      )}
+
+      {preview && (
+        <div className="mt-4 space-y-3">
+          <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm">
+            <div className="font-semibold text-blue-800 mb-1">Знайдено в файлі:</div>
+            <div className="text-blue-700 text-xs space-y-0.5">
+              <div>🏨 Номерів: <strong>{preview.rooms}</strong></div>
+              <div>👤 Гостей: <strong>{preview.guests}</strong></div>
+              <div>📅 Бронювань: <strong>{preview.bookings}</strong></div>
+            </div>
+          </div>
+          <button
+            onClick={handleImport}
+            disabled={importing}
+            className="w-full flex items-center justify-center gap-2 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold transition-colors disabled:opacity-60"
+          >
+            {importing ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+            {importing ? 'Імпортування...' : 'Імпортувати все'}
+          </button>
         </div>
       )}
     </div>
