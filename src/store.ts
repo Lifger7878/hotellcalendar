@@ -251,7 +251,7 @@ export const useHotelStore = create<HotelStore>()(
 
       signUp: async (email, password, name) => {
         set({ authLoading: true, authError: null });
-        const { error } = await supabase.auth.signUp({
+        const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: { data: { full_name: name } },
@@ -260,7 +260,17 @@ export const useHotelStore = create<HotelStore>()(
           set({ authLoading: false, authError: error.message });
           throw error;
         }
-        set({ authLoading: false });
+        // If email confirmation is disabled, session is returned immediately
+        if (data.session) {
+          const u = data.session.user;
+          set({
+            authLoading: false,
+            user: { id: u.id, email: u.email ?? '', name: u.user_metadata?.full_name ?? email },
+          });
+          await get().loadData();
+        } else {
+          set({ authLoading: false });
+        }
       },
 
       signInWithGoogle: async () => {

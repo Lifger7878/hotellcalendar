@@ -33,7 +33,11 @@ export function AuthPage({ defaultMode = 'login', onBack }: AuthPageProps) {
         await signIn(email, password);
       } else {
         await signUp(email, password, name);
-        setSuccess('Перевірте email для підтвердження реєстрації!');
+        // If not immediately logged in, email confirmation is required
+        const { useHotelStore: s } = await import('../store');
+        if (!s.getState().user) {
+          setSuccess('Перевірте email для підтвердження реєстрації!');
+        }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Помилка';
