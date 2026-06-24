@@ -165,6 +165,7 @@ interface HotelStore {
 
   // Guests
   findOrCreateGuest: (name: string) => Promise<Guest>;
+  deleteGuest: (id: string) => Promise<void>;
 
   // Import
   importBedbookingData: (rooms: Room[], guests: Guest[], bookings: Booking[]) => Promise<{ rooms: number; bookings: number }>;
@@ -418,7 +419,13 @@ export const useHotelStore = create<HotelStore>()(
 
       deleteBooking: async (id) => {
         const { user } = get();
-        if (user && !isDemo(user.id)) await supabase.from('bookings').delete().eq('id', id);
+        if (user && !isDemo(user.id)) {
+          const { error } = await supabase.from('bookings').delete().eq('id', id);
+          if (error) {
+            get().showToast('Помилка видалення бронювання: ' + error.message, 'error');
+            return;
+          }
+        }
         set((s) => ({ bookings: s.bookings.filter(b => b.id !== id) }));
         get().showToast('Бронювання видалено', 'info');
       },
@@ -469,8 +476,18 @@ export const useHotelStore = create<HotelStore>()(
 
       deleteRoom: async (id) => {
         const { user } = get();
-        if (user && !isDemo(user.id)) await supabase.from('rooms').delete().eq('id', id);
-        set((s) => ({ rooms: s.rooms.filter(r => r.id !== id) }));
+        if (user && !isDemo(user.id)) {
+          const { error } = await supabase.from('rooms').delete().eq('id', id);
+          if (error) {
+            get().showToast('Помилка видалення номера: ' + error.message, 'error');
+            return;
+          }
+        }
+        // Also remove bookings for this room from local state (cascade in DB)
+        set((s) => ({
+          rooms: s.rooms.filter(r => r.id !== id),
+          bookings: s.bookings.filter(b => b.roomId !== id),
+        }));
         get().showToast('Номер видалено', 'info');
       },
 
@@ -490,7 +507,22 @@ export const useHotelStore = create<HotelStore>()(
         return newG;
       },
 
-      // ---- IMPORT ----
+      deleteGuest: async (id) => {
+        const { user } = get();
+        if (user && !isDemo(user.id)) {
+          const { error } = await supabase.from('guests').delete().eq('id', id);
+          if (error) {
+            get().showToast('Помилка видалення: ' + error.message, 'error');
+            return;
+          }
+        }
+        // guest_id in bookings will be set null by DB cascade; clear locally too
+        set((s) => ({
+          guests: s.guests.filter(g => g.id !== id),
+          bookings: s.bookings.map(b => b.guestId === id ? { ...b, guestId: '' } : b),
+        }));
+        get().showToast('Гістя видалено', 'info');
+      },
       importBedbookingData: async (newRooms, newGuests, newBookings) => {
         const { user, rooms: existingRooms, guests: existingGuests, bookings: existingBookings } = get();
 

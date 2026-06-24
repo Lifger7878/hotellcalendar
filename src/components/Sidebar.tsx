@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   BedDouble, Calendar, BarChart3, Settings, LogOut,
-  Menu, X, ChevronRight, PlusCircle
+  Menu, X, ChevronRight, PlusCircle, Users
 } from 'lucide-react';
 import { useHotelStore } from '../store';
 
@@ -13,6 +13,7 @@ interface SidebarProps {
 const NAV_ITEMS = [
   { id: 'calendar', label: 'Календар', icon: Calendar, description: 'Таймлайн бронювань' },
   { id: 'rooms', label: 'Номери', icon: BedDouble, description: 'Управління номерами' },
+  { id: 'guests', label: 'Гості', icon: Users, description: 'Список гостей' },
   { id: 'stats', label: 'Статистика', icon: BarChart3, description: 'Аналітика та звіти' },
   { id: 'settings', label: 'Налаштування', icon: Settings, description: 'Профіль готелю' },
 ];

@@ -11,6 +11,7 @@ import { RoomModal } from './components/RoomModal';
 import { RoomsPanel } from './components/RoomsPanel';
 import { StatsPanel } from './components/StatsPanel';
 import { SettingsPanel } from './components/SettingsPanel';
+import { GuestsPanel } from './components/GuestsPanel';
 import { Toast } from './components/Toast';
 
 const hasSupabase = !!(
@@ -26,7 +27,7 @@ function openAppTab(mode: 'login' | 'register' = 'login') {
 
 export default function App() {
   const { user, authLoading, initAuth, signIn } = useHotelStore();
-  const [activeTab, setActiveTab] = useState<'calendar' | 'rooms' | 'stats' | 'settings'>('calendar');
+  const [activeTab, setActiveTab] = useState<'calendar' | 'rooms' | 'guests' | 'stats' | 'settings'>('calendar');
 
   // Detect which "page" we are:
   //   no hash  → landing page (public)
@@ -96,6 +97,7 @@ export default function App() {
         <main className="flex-1 overflow-auto p-3 md:p-5">
           {activeTab === 'calendar' && <CalendarTimeline />}
           {activeTab === 'rooms' && <RoomsPanel />}
+          {activeTab === 'guests' && <GuestsPanel />}
           {activeTab === 'stats' && <StatsPanel />}
           {activeTab === 'settings' && <SettingsPanel />}
         </main>
