@@ -520,12 +520,16 @@ export const useHotelStore = create<HotelStore>()(
           }
         }
 
-        // Remap bookings to use correct IDs
-        const remappedBookings = newBookings.map(b => ({
-          ...b,
-          roomId: roomIdMap.get(b.roomId) ?? b.roomId,
-          guestId: guestIdMap.get(b.guestId) ?? b.guestId,
-        }));
+        // Remap bookings to use correct IDs, skip already-imported (same room+guest+checkIn)
+        const existingKeys = new Set(existingBookings.map(b => `${b.roomId}|${b.guestId}|${b.checkIn}`));
+        const remappedBookings = newBookings
+          .map(b => ({
+            ...b,
+            id: crypto.randomUUID(), // always fresh ID to avoid PK conflicts on re-import
+            roomId: roomIdMap.get(b.roomId) ?? b.roomId,
+            guestId: guestIdMap.get(b.guestId) ?? b.guestId,
+          }))
+          .filter(b => !existingKeys.has(`${b.roomId}|${b.guestId}|${b.checkIn}`));
 
         if (!user || isDemo(user.id)) {
           // Demo mode: merge into state
@@ -535,20 +539,27 @@ export const useHotelStore = create<HotelStore>()(
           return { rooms: roomsToInsert.length, bookings: remappedBookings.length };
         }
 
-        // Real user — insert to Supabase in correct order
+        // Helper: insert in chunks to avoid Supabase payload limits
+        async function insertChunked<T>(table: string, rows: T[], chunkSize = 50) {
+          for (let i = 0; i < rows.length; i += chunkSize) {
+            const chunk = rows.slice(i, i + chunkSize);
+            const { error } = await supabase.from(table).insert(chunk as Parameters<typeof supabase.from>[0][]);
+            if (error) throw new Error(`Помилка збереження в ${table}: ${error.message}`);
+          }
+        }
+
+        // Real user — insert to Supabase in correct order (rooms → guests → bookings)
         if (roomsToInsert.length > 0) {
-          const { error } = await supabase.from('rooms').insert(roomsToInsert.map(r => roomToDb(r, user.id)));
-          if (error) throw new Error('Помилка збереження номерів: ' + error.message);
+          await insertChunked('rooms', roomsToInsert.map(r => roomToDb(r, user.id)));
         }
         if (guestsToInsert.length > 0) {
-          const { error } = await supabase.from('guests').insert(
-            guestsToInsert.map(g => ({ id: g.id, user_id: user.id, first_name: g.firstName, last_name: g.lastName, phone: g.phone, email: g.email }))
-          );
-          if (error) throw new Error('Помилка збереження гостей: ' + error.message);
+          await insertChunked('guests', guestsToInsert.map(g => ({
+            id: g.id, user_id: user.id, first_name: g.firstName,
+            last_name: g.lastName, phone: g.phone, email: g.email,
+          })));
         }
         if (remappedBookings.length > 0) {
-          const { error } = await supabase.from('bookings').insert(remappedBookings.map(b => bookingToDb(b, user.id)));
-          if (error) throw new Error('Помилка збереження бронювань: ' + error.message);
+          await insertChunked('bookings', remappedBookings.map(b => bookingToDb(b, user.id)));
         }
 
         await get().loadData();
